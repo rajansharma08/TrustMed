@@ -1,0 +1,213 @@
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { Brain, ScanLine, ShieldCheck } from "lucide-react";
+import { Scanner } from "@/components/Scanner";
+import { Timeline } from "@/components/Timeline";
+import { ResultPanel } from "@/components/ResultPanel";
+import { StatusPill } from "@/components/StatusPill";
+import { Button } from "@/components/ui/button";
+import { runAiMedicineRiskCheck } from "@/aiAnalysis";
+import { loadMedicineRecord } from "@/data";
+import { parseQRPayload } from "@/utils";
+import type { Checkpoint, Medicine, QRPayload, RiskAnalysisResult } from "@/types";
+import { toTimelineCheckpoints, toTimelineMedicine } from "@/utils/timelineAdapter";
+
+const VerifyPage = () => {
+  const [raw, setRaw] = useState("");
+  const [payload, setPayload] = useState<QRPayload | null>(null);
+  const [parseErr, setParseErr] = useState("");
+
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [medicine, setMedicine] = useState<Medicine | null>(null);
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [analysis, setAnalysis] = useState<RiskAnalysisResult | null>(null);
+  const analysisRunRef = useRef(0);
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannerKey, setScannerKey] = useState(0);
+
+  function parsePayload(text: string): boolean {
+    setRaw(text);
+    setErr("");
+    setMedicine(null);
+    setCheckpoints([]);
+    setAnalysis(null);
+    setAnalysisBusy(false);
+
+    try {
+      const parsed = parseQRPayload(text.trim());
+      setPayload(parsed);
+      setParseErr("");
+      return true;
+    } catch (e: any) {
+      setPayload(null);
+      setParseErr(String(e?.message || e));
+      return false;
+    }
+  }
+
+  function handleScannerPayload(text: string): boolean {
+    const ok = parsePayload(text);
+    if (ok) setShowScanner(false);
+    return ok;
+  }
+
+  function startScanAgain() {
+    setShowScanner(true);
+    setScannerKey((k) => k + 1);
+  }
+
+  async function load(contract: string, id: string) {
+    setBusy(true);
+    setErr("");
+    setAnalysis(null);
+    setAnalysisBusy(true);
+
+    const runId = ++analysisRunRef.current;
+    try {
+      const record = await loadMedicineRecord(contract, id);
+      setMedicine(record.medicine);
+      setCheckpoints(record.checkpoints);
+
+      const report = await runAiMedicineRiskCheck(record.medicine, record.checkpoints);
+      if (runId === analysisRunRef.current) {
+        setAnalysis(report);
+      }
+    } catch (e: any) {
+      setErr(String(e?.shortMessage || e?.message || e));
+      setMedicine(null);
+      setCheckpoints([]);
+      if (runId === analysisRunRef.current) {
+        setAnalysis(null);
+      }
+    } finally {
+      setBusy(false);
+      if (runId === analysisRunRef.current) {
+        setAnalysisBusy(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (payload) load(payload.contract, payload.medicineId).catch(() => {});
+  }, [payload?.contract, payload?.medicineId]);
+
+  return (
+    <div className="container mx-auto px-4 py-8 max-w-6xl">
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-3xl font-display font-bold text-foreground">Verify Medicine</h1>
+          <p className="text-muted-foreground">Scan QR to verify full history and AI authenticity assessment.</p>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-6">
+          <div className="glass-card p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <ScanLine className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-display font-semibold text-foreground">Scan</h2>
+            </div>
+            {!showScanner ? (
+              <Button onClick={startScanAgain} className="gradient-primary text-primary-foreground border-0">
+                {analysis || medicine ? "Scan Now Again" : "Scan Now"}
+              </Button>
+            ) : (
+              <Scanner
+                key={scannerKey}
+                onScan={handleScannerPayload}
+                autoStart
+                showControls={false}
+                allowStop={false}
+                startLabel="Scan Now"
+              />
+            )}
+          </div>
+
+          <div className="glass-card p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <ScanLine className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-display font-semibold text-foreground">QR Payload</h2>
+            </div>
+            <textarea
+              value={raw}
+              onChange={(e) => parsePayload(e.target.value)}
+              placeholder='Paste payload JSON, medtrace://..., or URL query format'
+              rows={8}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            />
+            {payload && (
+              <ResultPanel
+                type="info"
+                title={`Medicine #${payload.medicineId}`}
+                message={`contract: ${payload.contract} | chainId: ${payload.chainId}`}
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {parseErr && <ResultPanel type="error" title="Parse Error" message={parseErr} />}
+          {busy && <ResultPanel type="loading" title="Loading Record" message="Fetching medicine and checkpoint history..." />}
+          {err && <ResultPanel type="error" title="Verification Failed" message={err} />}
+          {analysisBusy && (
+            <ResultPanel
+              type="loading"
+              title="Running AI Analysis"
+              message="Evaluating timeline consistency and anomaly risk..."
+            />
+          )}
+          {!busy && !analysisBusy && !medicine && !err && !parseErr && (
+            <ResultPanel type="empty" title="No Result Yet" message="Click Scan Now or paste a QR payload to start verification." />
+          )}
+        </div>
+
+        {!analysisBusy && analysis && (
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-display font-semibold text-foreground">
+                AI Authenticity Check
+              </h2>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+              <StatusPill
+                variant={analysis.verdict === "SUSPECT" ? "suspect" : analysis.verdict === "REVIEW" ? "review" : "legit"}
+                className="text-sm px-4 py-1.5"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                {analysis.verdict}
+              </StatusPill>
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-foreground">Suspicion Level</span>
+                  <span className="text-sm font-bold text-foreground">{analysis.suspicionScore.toFixed(1)}%</span>
+                </div>
+                <div className="h-2 rounded-full bg-secondary overflow-hidden">
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${analysis.suspicionScore}%` }} />
+                </div>
+              </div>
+            </div>
+
+            <p className="text-sm text-muted-foreground">{analysis.summary}</p>
+            <ul className="space-y-1.5 text-sm text-muted-foreground list-disc pl-5">
+              {analysis.highlights.map((highlight, index) => (
+                <li key={`${index}-${highlight}`}>{highlight}</li>
+              ))}
+            </ul>
+            <pre className="text-xs whitespace-pre-wrap rounded-lg bg-secondary/50 p-3 text-muted-foreground">
+              {analysis.aiNarrative}
+            </pre>
+          </motion.div>
+        )}
+
+        {!busy && medicine && (
+          <Timeline medicine={toTimelineMedicine(medicine)} checkpoints={toTimelineCheckpoints(checkpoints)} />
+        )}
+      </motion.div>
+    </div>
+  );
+};
+
+export default VerifyPage;
