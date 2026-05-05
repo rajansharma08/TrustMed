@@ -17,7 +17,6 @@ import { toTimelineCheckpoints, toTimelineMedicine } from "@/utils/timelineAdapt
 
 const VerifyPage = () => {
   const location = useLocation();
-  const [raw, setRaw] = useState("");
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [parseErr, setParseErr] = useState("");
 
@@ -31,16 +30,13 @@ const VerifyPage = () => {
   const analysisRunRef = useRef(0);
   const [showScanner, setShowScanner] = useState(false);
   const [scannerKey, setScannerKey] = useState(0);
-  const [contractHint, setContractHint] = useState("");
 
   function parsePayload(text: string): boolean {
-    setRaw(text);
     setErr("");
     setMedicine(null);
     setCheckpoints([]);
     setAnalysis(null);
     setAnalysisBusy(false);
-    setContractHint("");
 
     try {
       const parsed = parseQRPayload(text.trim());
@@ -49,7 +45,7 @@ const VerifyPage = () => {
       return true;
     } catch (e: any) {
       setPayload(null);
-      setParseErr(String(e?.message || e));
+      setParseErr("We couldn't read that QR code. Please scan a valid code.");
       return false;
     }
   }
@@ -70,7 +66,6 @@ const VerifyPage = () => {
     setErr("");
     setAnalysis(null);
     setAnalysisBusy(true);
-    setContractHint("");
     let resolvedHint = "";
     let resolvedAddress = contract;
 
@@ -79,22 +74,21 @@ const VerifyPage = () => {
       const resolved = await resolveContractAddressForRead(contract);
       resolvedHint = resolved.hint;
       resolvedAddress = resolved.address;
-      setContractHint(resolvedHint);
       const record = await loadMedicineRecord(resolvedAddress, id);
       setMedicine(record.medicine);
       setCheckpoints(record.checkpoints);
 
       const report = await runAiMedicineRiskCheck(record.medicine, record.checkpoints);
       if (runId === analysisRunRef.current) {
-        setAnalysis(report);
+        setAnalysis(report.usedGemini ? report : null);
       }
     } catch (e: any) {
       const message = String(e?.shortMessage || e?.message || e);
       const staleQrHint =
         resolvedHint || resolvedAddress !== contract || contract !== CONTRACT_ADDRESS
-          ? " This QR may belong to a previous local deployment. Create and scan a fresh QR from the current session."
-          : "";
-      setErr(message.includes("was not found for this contract") ? `${message}${staleQrHint}` : message);
+          ? "This QR code doesn't match the current demo. Please scan a fresh code."
+          : "We couldn't verify this item right now. Please try again.";
+      setErr(message.includes("was not found for this contract") ? staleQrHint : "We couldn't verify this item right now. Please try again.");
       setMedicine(null);
       setCheckpoints([]);
       if (runId === analysisRunRef.current) {
@@ -121,78 +115,52 @@ const VerifyPage = () => {
     <div className="container mx-auto px-4 py-8 max-w-6xl">
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-display font-bold text-foreground">Verify Medicine</h1>
-          <p className="text-muted-foreground">Scan QR to verify full history and AI authenticity assessment.</p>
+          <h1 className="text-3xl font-display font-bold text-foreground">Check Your Medicine</h1>
+          <p className="text-muted-foreground">Scan the QR code to view its verified journey.</p>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-6">
-          <div className="glass-card p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              <ScanLine className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-display font-semibold text-foreground">Scan</h2>
-            </div>
-            {!showScanner ? (
-              <Button onClick={startScanAgain} className="gradient-primary text-primary-foreground border-0">
-                {analysis || medicine ? "Scan Now Again" : "Scan Now"}
-              </Button>
-            ) : (
-              <Scanner
-                key={scannerKey}
-                onScan={handleScannerPayload}
-                autoStart
-                showControls={false}
-                allowStop={false}
-                startLabel="Scan Now"
-              />
-            )}
+        <div className="glass-card p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <ScanLine className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-display font-semibold text-foreground">Scan QR Code</h2>
           </div>
-
-          <div className="glass-card p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              <ScanLine className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-display font-semibold text-foreground">QR Payload</h2>
-            </div>
-            <textarea
-              value={raw}
-              onChange={(e) => parsePayload(e.target.value)}
-              placeholder='Paste payload JSON, medtrace://..., or URL query format'
-              rows={8}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          {!showScanner ? (
+            <Button onClick={startScanAgain} className="gradient-primary text-primary-foreground border-0">
+              {analysis || medicine ? "Scan Again" : "Start Scan"}
+            </Button>
+          ) : (
+            <Scanner
+              key={scannerKey}
+              onScan={handleScannerPayload}
+              autoStart
+              showControls={false}
+              allowStop={false}
+              startLabel="Start Scan"
             />
-            {payload && (
-              <ResultPanel
-                type="info"
-                title={`Medicine #${payload.medicineId}`}
-                message={`contract: ${payload.contract} | chainId: ${payload.chainId}`}
-              />
-            )}
-          </div>
+          )}
         </div>
 
         <div className="space-y-4">
-          {parseErr && <ResultPanel type="error" title="Parse Error" message={parseErr} />}
-          {contractHint && <ResultPanel type="warning" title="Contract Fallback" message={contractHint} />}
-          {busy && <ResultPanel type="loading" title="Loading Record" message="Fetching medicine and checkpoint history..." />}
-          {err && <ResultPanel type="error" title="Verification Failed" message={err} />}
+          {parseErr && <ResultPanel type="error" title="Scan Failed" message={parseErr} />}
+          {busy && <ResultPanel type="loading" title="Checking Record" message="Looking up this medicine's history..." />}
+          {err && <ResultPanel type="error" title="Could Not Verify" message={err} />}
           {analysisBusy && (
             <ResultPanel
               type="loading"
-              title="Running AI Analysis"
-              message="Evaluating timeline consistency and anomaly risk..."
+              title="Checking for Safety Signals"
+              message="Reviewing the timeline for unusual activity..."
             />
           )}
           {!busy && !analysisBusy && !medicine && !err && !parseErr && (
-            <ResultPanel type="empty" title="No Result Yet" message="Click Scan Now or paste a QR payload to start verification." />
+            <ResultPanel type="empty" title="Ready to Scan" message="Tap Start Scan and point your camera at the QR code." />
           )}
         </div>
 
-        {!analysisBusy && analysis && (
+        {!analysisBusy && analysis && analysis.usedGemini && (
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Brain className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-display font-semibold text-foreground">
-                AI Authenticity Check
-              </h2>
+              <h2 className="text-lg font-display font-semibold text-foreground">Safety Check</h2>
             </div>
 
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
@@ -205,7 +173,7 @@ const VerifyPage = () => {
               </StatusPill>
               <div className="flex-1">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-foreground">Suspicion Level</span>
+                  <span className="text-sm font-medium text-foreground">Risk Level</span>
                   <span className="text-sm font-bold text-foreground">{analysis.suspicionScore.toFixed(1)}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-secondary overflow-hidden">
