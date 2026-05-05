@@ -24,9 +24,10 @@ Copy-Item .env.example .env
 
 Required/important variables:
 - `VITE_RPC_URL`: blockchain RPC URL
+- `VITE_WALLET_RPC_URL`: wallet network RPC URL (important for MetaMask chain setup)
 - `VITE_CHAIN_ID`: expected chain ID (`31337` for local Hardhat)
 - `VITE_CONTRACT_ADDRESS`: deployed `MedicineTrace` contract address
-- `VITE_AUTHORIZED_WRITE_ADDRESS`: wallet allowed to write from UI
+- `VITE_AUTHORIZED_WRITE_ADDRESS`: optional preferred writer badge address
 - `VITE_GEMINI_API_KEY`: optional, enables Gemini-assisted narrative
 - `VITE_GEMINI_MODEL`: Gemini model name
 - `VITE_VERIFY_BASE_URL`: optional, base URL for sharable verify links
@@ -43,6 +44,33 @@ npm.cmd run dev
 ```
 
 Open `http://localhost:5173`.
+Open `http://localhost:8080`.
+
+## Deploy on Vercel
+1. Push repo to GitHub.
+2. In Vercel, `Add New Project` and import the repo.
+3. Set `Root Directory` to `trace-trust`.
+4. Build settings:
+- Framework Preset: `Vite`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+5. Add Environment Variables in Vercel project settings:
+- `VITE_RPC_URL`
+- `VITE_WALLET_RPC_URL`
+- `VITE_CHAIN_ID`
+- `VITE_CONTRACT_ADDRESS`
+- `VITE_AUTHORIZED_WRITE_ADDRESS`
+- `VITE_VERIFY_BASE_URL` (set to your Vercel URL, e.g. `https://trustmed.vercel.app`)
+- `VITE_GEMINI_API_KEY` (optional)
+- `VITE_GEMINI_MODEL` (optional)
+- `VITE_DASHBOARD_MAX_MEDICINE_ID`
+- `VITE_DASHBOARD_SCAN_MISS_LIMIT`
+6. Deploy.
+
+Notes:
+- `vercel.json` is already added for SPA rewrite so direct route refresh works (`/verify`, `/scan-add`, etc.).
+- Do not keep `VITE_RPC_URL=http://127.0.0.1:8545` in production; use a reachable RPC endpoint.
+- If env values change, trigger a redeploy.
 
 ## Chain Dependency (Important)
 This app expects a deployed contract. Typical flow:
@@ -60,7 +88,7 @@ This app expects a deployed contract. Typical flow:
 6. On `/dashboard`, review cross-medicine analytics and flagged cases.
 
 ## Write Access Behavior
-- UI checks that connected wallet equals `VITE_AUTHORIZED_WRITE_ADDRESS`.
+- UI allows any connected wallet; contract roles decide who can create or add checkpoints.
 - Contract enforces role checks (`MANUFACTURER_ROLE` / `PARTICIPANT_ROLE`).
 - For local demo, Hardhat account #0 is default authorized writer.
 

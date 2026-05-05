@@ -6,9 +6,9 @@ import { FormField } from "@/components/FormField";
 import { ResultPanel } from "@/components/ResultPanel";
 import { QRCodeBox } from "@/components/QRCodeBox";
 import { useWallet } from "@/contexts/WalletContext";
-import { AUTHORIZED_WRITE_ADDRESS, CHAIN_ID, CONTRACT_ADDRESS } from "@/config";
-import { getContractWrite, getWalletAddress, isWalletSessionActive } from "@/eth";
-import { buildQRPayload, shortAddr, toUnixSeconds } from "@/utils";
+import { CHAIN_ID, CONTRACT_ADDRESS, VERIFY_BASE_URL } from "@/config";
+import { getContractWrite, getWalletAddress, isWalletSessionActive, resolvePreferredContractAddress } from "@/eth";
+import { buildQRPayload, buildVerifyUrl, toUnixSeconds } from "@/utils";
 
 function localDateTimeNow(): string {
   const d = new Date();
@@ -24,10 +24,14 @@ function localDateTimeAfterOneYear(): string {
 }
 
 const CreatePage = () => {
-  const { isConnected, isAuthorized } = useWallet();
+  const { isConnected } = useWallet();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [medicineId, setMedicineId] = useState("");
+  const [contractHint, setContractHint] = useState("");
+  const [createdContractAddress, setCreatedContractAddress] = useState("");
+  const runtimeHostname = typeof window !== "undefined" ? window.location.hostname : "";
+  const usingLocalhostBase = /^(localhost|127\.0\.0\.1)$/i.test(runtimeHostname) && !VERIFY_BASE_URL;
 
   const [form, setForm] = useState({
     name: "Paracetamol 500mg",
@@ -44,12 +48,14 @@ const CreatePage = () => {
   });
 
   const update = (key: string) => (value: string) => setForm((f) => ({ ...f, [key]: value }));
-  const canSubmit = isConnected && isAuthorized && !busy;
+  const canSubmit = isConnected && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setMedicineId("");
+    setContractHint("");
+    setCreatedContractAddress("");
 
     try {
       if (!isWalletSessionActive()) {
@@ -57,14 +63,18 @@ const CreatePage = () => {
       }
 
       const active = (await getWalletAddress()).toLowerCase();
-      if (active !== AUTHORIZED_WRITE_ADDRESS) {
-        throw new Error(
-          `Unauthorized wallet. Only Account #0 (${shortAddr(AUTHORIZED_WRITE_ADDRESS)}) can create medicines.`,
-        );
-      }
 
       setBusy(true);
-      const c = await getContractWrite();
+      const resolved = await resolvePreferredContractAddress();
+      setContractHint(resolved.hint);
+      setCreatedContractAddress(resolved.address);
+      const c = await getContractWrite(resolved.address);
+      const manufacturerRole = await c.MANUFACTURER_ROLE();
+      const hasManufacturerRole: boolean = await c.hasRole(manufacturerRole, active);
+      if (!hasManufacturerRole) {
+        throw new Error("Connected wallet is missing MANUFACTURER_ROLE on this contract.");
+      }
+      const expectedMedicineId: bigint = await c.nextMedicineId();
 
       const originLocationWithTime = `${form.originLocation} (reported at ${form.originCheckpointTime})`;
       const policyTag = `policy://stripsPerBox=${Math.max(
@@ -87,18 +97,14 @@ const CreatePage = () => {
       );
 
       const receipt = await tx.wait();
-      const parsed = receipt.logs
-        .map((l: any) => {
-          try {
-            return c.interface.parseLog(l);
-          } catch {
-            return null;
-          }
-        })
-        .find((p: any) => p && p.name === "MedicineCreated");
-
-      const id = parsed?.args?.medicineId?.toString();
-      if (!id) throw new Error("Could not read medicineId from transaction logs.");
+      const eventLog = receipt?.logs?.find?.((log: any) => log?.fragment?.name === "MedicineCreated");
+      const eventId = eventLog?.args?.medicineId?.toString?.();
+      const fallbackExists: boolean = await c.medicineExists(expectedMedicineId);
+      const fallbackId = fallbackExists ? expectedMedicineId.toString() : "";
+      const id = eventId || fallbackId;
+      if (!id) {
+        throw new Error("Medicine created, but the app could not confirm the new medicineId.");
+      }
       setMedicineId(id);
     } catch (e: any) {
       setError(String(e?.shortMessage || e?.message || e));
@@ -108,8 +114,13 @@ const CreatePage = () => {
   }
 
   const qrValue = useMemo(
-    () => (medicineId ? JSON.stringify(buildQRPayload(CHAIN_ID, CONTRACT_ADDRESS, medicineId)) : ""),
-    [medicineId],
+    () => {
+      if (!medicineId) return "";
+      const payload = buildQRPayload(CHAIN_ID, createdContractAddress || CONTRACT_ADDRESS, medicineId);
+      const runtimeBaseUrl = typeof window !== "undefined" ? window.location.origin : "";
+      return buildVerifyUrl(VERIFY_BASE_URL, payload, runtimeBaseUrl);
+    },
+    [createdContractAddress, medicineId],
   );
 
   return (
@@ -124,13 +135,6 @@ const CreatePage = () => {
 
         {!isConnected && (
           <ResultPanel type="warning" title="Not Connected" message="Please login to create medicines on the blockchain." />
-        )}
-        {isConnected && !isAuthorized && (
-          <ResultPanel
-            type="error"
-            title="Unauthorized"
-            message={`Only account ${shortAddr(AUTHORIZED_WRITE_ADDRESS)} can create medicines.`}
-          />
         )}
 
         <div className="grid lg:grid-cols-2 gap-6">
@@ -238,7 +242,7 @@ const CreatePage = () => {
               {!canSubmit && !busy && (
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
-                  {!isConnected ? "Login required" : "Authorized writer only"}
+                  {!isConnected ? "Login required" : "Wallet check pending"}
                 </span>
               )}
             </div>
@@ -246,9 +250,17 @@ const CreatePage = () => {
 
           <div className="space-y-4">
             {error && <ResultPanel type="error" title="Create Failed" message={error} />}
+            {contractHint && <ResultPanel type="warning" title="Contract Fallback" message={contractHint} />}
             {medicineId ? (
               <>
                 <ResultPanel type="success" title="Medicine Created" message={`medicineId: ${medicineId}`} />
+                {usingLocalhostBase && (
+                  <ResultPanel
+                    type="warning"
+                    title="Phone Scan Note"
+                    message="This QR uses localhost because no public/LAN verify base URL is configured. For phone scanning, open this app from your laptop's LAN IP before creating the QR."
+                  />
+                )}
                 <QRCodeBox value={qrValue} />
               </>
             ) : (

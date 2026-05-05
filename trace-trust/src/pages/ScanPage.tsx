@@ -7,8 +7,8 @@ import { ResultPanel } from "@/components/ResultPanel";
 import { Timeline } from "@/components/Timeline";
 import { Scanner } from "@/components/Scanner";
 import { useWallet } from "@/contexts/WalletContext";
-import { AUTHORIZED_WRITE_ADDRESS, CONTRACT_ADDRESS } from "@/config";
-import { getContractWrite, getReadProvider, getWalletAddress, isWalletSessionActive } from "@/eth";
+import { CONTRACT_ADDRESS } from "@/config";
+import { getContractWrite, getWalletAddress, isWalletSessionActive, resolveContractAddressForRead } from "@/eth";
 import { loadMedicineRecord } from "@/data";
 import { parseQRPayload, shortAddr } from "@/utils";
 import type { Checkpoint, Medicine, QRPayload } from "@/types";
@@ -21,7 +21,7 @@ function localDateTimeNow(): string {
 }
 
 const ScanPage = () => {
-  const { isConnected, isAuthorized } = useWallet();
+  const { isConnected } = useWallet();
   const [raw, setRaw] = useState("");
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [parseErr, setParseErr] = useState("");
@@ -42,26 +42,6 @@ const ScanPage = () => {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [activeContract, setActiveContract] = useState("");
   const [contractHint, setContractHint] = useState("");
-
-  async function resolveContractAddress(scannedContract: string): Promise<string> {
-    const provider = getReadProvider();
-    const scannedCode = await provider.getCode(scannedContract);
-    if (scannedCode !== "0x") return scannedContract;
-
-    if (CONTRACT_ADDRESS) {
-      const configuredCode = await provider.getCode(CONTRACT_ADDRESS);
-      if (configuredCode !== "0x") {
-        setContractHint(
-          `QR contract has no deployed code. Using configured contract ${CONTRACT_ADDRESS} instead.`,
-        );
-        return CONTRACT_ADDRESS;
-      }
-    }
-
-    throw new Error(
-      `Scanned contract ${scannedContract} has no deployed code on current RPC. Verify QR payload and VITE_CONTRACT_ADDRESS.`,
-    );
-  }
 
   function handlePayload(text: string): boolean {
     setRaw(text);
@@ -85,14 +65,24 @@ const ScanPage = () => {
     setRecordBusy(true);
     setErr("");
     setContractHint("");
+    let resolvedHint = "";
+    let resolvedAddress = current.contract;
     try {
-      const contractToUse = await resolveContractAddress(current.contract);
-      setActiveContract(contractToUse);
-      const record = await loadMedicineRecord(contractToUse, current.medicineId);
+      const resolved = await resolveContractAddressForRead(current.contract);
+      resolvedAddress = resolved.address;
+      resolvedHint = resolved.hint;
+      setActiveContract(resolvedAddress);
+      setContractHint(resolvedHint);
+      const record = await loadMedicineRecord(resolvedAddress, current.medicineId);
       setMedicine(record.medicine);
       setCheckpoints(record.checkpoints);
     } catch (e: any) {
-      setErr(String(e?.shortMessage || e?.message || e));
+      const message = String(e?.shortMessage || e?.message || e);
+      const staleQrHint =
+        resolvedHint || resolvedAddress !== current.contract || current.contract !== CONTRACT_ADDRESS
+          ? " This QR may belong to a previous local deployment. Create a fresh medicine and use the newly generated QR."
+          : "";
+      setErr(message.includes("was not found for this contract") ? `${message}${staleQrHint}` : message);
     } finally {
       setRecordBusy(false);
     }
@@ -113,14 +103,9 @@ const ScanPage = () => {
         throw new Error("Login required. Please click Login in the wallet section.");
       }
       const active = (await getWalletAddress()).toLowerCase();
-      if (active !== AUTHORIZED_WRITE_ADDRESS) {
-        throw new Error(
-          `Unauthorized wallet. Only Account #0 (${shortAddr(AUTHORIZED_WRITE_ADDRESS)}) can add checkpoints.`,
-        );
-      }
 
       setBusy(true);
-      const contractToUse = activeContract || (await resolveContractAddress(payload.contract));
+      const contractToUse = activeContract || (await resolveContractAddressForRead(payload.contract)).address;
       const c = await getContractWrite(contractToUse);
       const participantRole = await c.PARTICIPANT_ROLE();
       const hasParticipantRole: boolean = await c.hasRole(participantRole, active);
@@ -154,7 +139,7 @@ const ScanPage = () => {
     }
   }
 
-  const canSubmit = !!payload && isConnected && isAuthorized && !busy;
+  const canSubmit = !!payload && isConnected && !busy;
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -166,13 +151,6 @@ const ScanPage = () => {
 
         {!isConnected && (
           <ResultPanel type="warning" title="Not Connected" message="Please login to add transit checkpoints." />
-        )}
-        {isConnected && !isAuthorized && (
-          <ResultPanel
-            type="error"
-            title="Unauthorized"
-            message={`Only account ${shortAddr(AUTHORIZED_WRITE_ADDRESS)} can submit new checkpoints.`}
-          />
         )}
 
         <div className="grid lg:grid-cols-2 gap-6">
@@ -259,7 +237,7 @@ const ScanPage = () => {
                 {!canSubmit && !busy && (
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                     <AlertTriangle className="h-3 w-3" />
-                    {!isConnected ? "Login required" : "Authorized writer only"}
+                    {!isConnected ? "Login required" : "Wallet check pending"}
                   </span>
                 )}
               </div>

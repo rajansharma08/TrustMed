@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Brain, ScanLine, ShieldCheck } from "lucide-react";
+import { useLocation } from "react-router-dom";
 import { Scanner } from "@/components/Scanner";
 import { Timeline } from "@/components/Timeline";
 import { ResultPanel } from "@/components/ResultPanel";
 import { StatusPill } from "@/components/StatusPill";
 import { Button } from "@/components/ui/button";
 import { runAiMedicineRiskCheck } from "@/aiAnalysis";
+import { CONTRACT_ADDRESS } from "@/config";
 import { loadMedicineRecord } from "@/data";
+import { resolveContractAddressForRead } from "@/eth";
 import { parseQRPayload } from "@/utils";
 import type { Checkpoint, Medicine, QRPayload, RiskAnalysisResult } from "@/types";
 import { toTimelineCheckpoints, toTimelineMedicine } from "@/utils/timelineAdapter";
 
 const VerifyPage = () => {
+  const location = useLocation();
   const [raw, setRaw] = useState("");
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [parseErr, setParseErr] = useState("");
@@ -27,6 +31,7 @@ const VerifyPage = () => {
   const analysisRunRef = useRef(0);
   const [showScanner, setShowScanner] = useState(false);
   const [scannerKey, setScannerKey] = useState(0);
+  const [contractHint, setContractHint] = useState("");
 
   function parsePayload(text: string): boolean {
     setRaw(text);
@@ -35,6 +40,7 @@ const VerifyPage = () => {
     setCheckpoints([]);
     setAnalysis(null);
     setAnalysisBusy(false);
+    setContractHint("");
 
     try {
       const parsed = parseQRPayload(text.trim());
@@ -64,10 +70,17 @@ const VerifyPage = () => {
     setErr("");
     setAnalysis(null);
     setAnalysisBusy(true);
+    setContractHint("");
+    let resolvedHint = "";
+    let resolvedAddress = contract;
 
     const runId = ++analysisRunRef.current;
     try {
-      const record = await loadMedicineRecord(contract, id);
+      const resolved = await resolveContractAddressForRead(contract);
+      resolvedHint = resolved.hint;
+      resolvedAddress = resolved.address;
+      setContractHint(resolvedHint);
+      const record = await loadMedicineRecord(resolvedAddress, id);
       setMedicine(record.medicine);
       setCheckpoints(record.checkpoints);
 
@@ -76,7 +89,12 @@ const VerifyPage = () => {
         setAnalysis(report);
       }
     } catch (e: any) {
-      setErr(String(e?.shortMessage || e?.message || e));
+      const message = String(e?.shortMessage || e?.message || e);
+      const staleQrHint =
+        resolvedHint || resolvedAddress !== contract || contract !== CONTRACT_ADDRESS
+          ? " This QR may belong to a previous local deployment. Create and scan a fresh QR from the current session."
+          : "";
+      setErr(message.includes("was not found for this contract") ? `${message}${staleQrHint}` : message);
       setMedicine(null);
       setCheckpoints([]);
       if (runId === analysisRunRef.current) {
@@ -93,6 +111,11 @@ const VerifyPage = () => {
   useEffect(() => {
     if (payload) load(payload.contract, payload.medicineId).catch(() => {});
   }, [payload?.contract, payload?.medicineId]);
+
+  useEffect(() => {
+    if (!location.search) return;
+    parsePayload(window.location.href);
+  }, [location.search]);
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -148,6 +171,7 @@ const VerifyPage = () => {
 
         <div className="space-y-4">
           {parseErr && <ResultPanel type="error" title="Parse Error" message={parseErr} />}
+          {contractHint && <ResultPanel type="warning" title="Contract Fallback" message={contractHint} />}
           {busy && <ResultPanel type="loading" title="Loading Record" message="Fetching medicine and checkpoint history..." />}
           {err && <ResultPanel type="error" title="Verification Failed" message={err} />}
           {analysisBusy && (
@@ -196,7 +220,7 @@ const VerifyPage = () => {
                 <li key={`${index}-${highlight}`}>{highlight}</li>
               ))}
             </ul>
-            <pre className="text-xs whitespace-pre-wrap rounded-lg bg-secondary/50 p-3 text-muted-foreground">
+            <pre className="max-h-[28rem] overflow-auto text-xs whitespace-pre-wrap break-words rounded-lg bg-secondary/50 p-3 text-muted-foreground">
               {analysis.aiNarrative}
             </pre>
           </motion.div>

@@ -232,7 +232,7 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
   return { verdict, suspicionScore, summary, highlights, diagnostics };
 }
 
-async function askGemini(prompt: string): Promise<{ text: string; finishReason?: string }> {
+async function askGeminiOnce(prompt: string): Promise<{ text: string; finishReason?: string }> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       GEMINI_MODEL
@@ -242,11 +242,15 @@ async function askGemini(prompt: string): Promise<{ text: string; finishReason?:
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 1200 },
+        generationConfig: { temperature: 0.2, maxOutputTokens: 1800 },
       }),
     }
   );
-  if (!res.ok) throw new Error(`Gemini API error (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(`Gemini API error (${res.status})`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const firstCandidate = data?.candidates?.[0];
   const text = (data?.candidates || [])
@@ -256,6 +260,62 @@ async function askGemini(prompt: string): Promise<{ text: string; finishReason?:
     .trim();
   if (!text) throw new Error("Empty Gemini response");
   return { text, finishReason: firstCandidate?.finishReason };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function askGemini(prompt: string): Promise<{ text: string; finishReason?: string }> {
+  let first: { text: string; finishReason?: string } | null = null;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      first = await askGeminiOnce(prompt);
+      break;
+    } catch (e: any) {
+      lastError = e;
+      const status = Number(e?.status || 0);
+      const retryable = status === 429 || status === 500 || status === 503;
+      if (!retryable || attempt === 2) {
+        throw e;
+      }
+      await sleep(800 * (attempt + 1));
+    }
+  }
+
+  if (!first) {
+    throw lastError instanceof Error ? lastError : new Error("Gemini request failed");
+  }
+
+  if (first.finishReason !== "MAX_TOKENS") {
+    return first;
+  }
+
+  let combined = first.text;
+  let finishReason = first.finishReason;
+
+  for (let i = 0; i < 2 && finishReason === "MAX_TOKENS"; i++) {
+    const continuationPrompt = [
+      "Continue the following audit report exactly from where it stopped.",
+      "Do not restart from the beginning.",
+      "Do not repeat previous lines unless absolutely necessary for one incomplete sentence.",
+      "Keep the same structure and finish the remaining content only.",
+      "",
+      "Partial report:",
+      combined,
+    ].join("\n");
+
+    const next = await askGeminiOnce(continuationPrompt);
+    const trimmedNext = next.text.trim();
+    if (!trimmedNext) break;
+
+    combined = `${combined}\n${trimmedNext}`;
+    finishReason = next.finishReason;
+  }
+
+  return { text: combined, finishReason };
 }
 
 function parseGeminiSignal(text: string): { verdict: RiskVerdict | null; score: number | null; summary: string | null } {
@@ -330,7 +390,7 @@ export async function runAiMedicineRiskCheck(
     const summary = isLikelyCompleteSummary(parsed.summary) ? parsed.summary! : local.summary;
     const aiNarrative =
       ai.finishReason === "MAX_TOKENS"
-        ? `${ai.text}\n\n`
+        ? `${ai.text}\n\n[Note: AI response was very long and may still be partially truncated.]`
         : ai.text;
     const hasOnlyConsistencyNote =
       local.highlights.length === 1 &&
@@ -361,9 +421,16 @@ export async function runAiMedicineRiskCheck(
       usedGemini: true,
     };
   } catch (e: any) {
+    const status = Number(e?.status || 0);
+    const narrative =
+      status === 503
+        ? "Gemini is temporarily unavailable right now. Showing local anomaly analysis."
+        : status === 429
+          ? "Gemini rate limit reached for now. Showing local anomaly analysis."
+          : `Gemini analysis unavailable: ${String(e?.message || e)}. Showing local anomaly analysis.`;
     return {
       ...local,
-      aiNarrative: `Gemini analysis unavailable: ${String(e?.message || e)}. Showing local anomaly analysis.`,
+      aiNarrative: narrative,
       usedGemini: false,
     };
   }

@@ -1,5 +1,5 @@
 import { BrowserProvider, Contract, JsonRpcProvider } from "ethers";
-import { CHAIN_ID, CONTRACT_ADDRESS, RPC_URL } from "./config";
+import { CHAIN_ID, CONTRACT_ADDRESS, DEPLOYMENT_CONTRACT_ADDRESS, RPC_URL, WALLET_RPC_URL } from "./config";
 import { MEDICINE_TRACE_ABI } from "./abi/MedicineTraceAbi";
 
 declare global {
@@ -10,6 +10,59 @@ declare global {
 
 export function getReadProvider() {
   return new JsonRpcProvider(RPC_URL);
+}
+
+export async function resolveContractAddressForRead(scannedContract: string): Promise<{
+  address: string;
+  hint: string;
+}> {
+  const provider = getReadProvider();
+  const scannedCode = await provider.getCode(scannedContract);
+  if (scannedCode !== "0x") {
+    return { address: scannedContract, hint: "" };
+  }
+
+  if (CONTRACT_ADDRESS) {
+    const configuredCode = await provider.getCode(CONTRACT_ADDRESS);
+    if (configuredCode !== "0x") {
+      return {
+        address: CONTRACT_ADDRESS,
+        hint: `QR contract has no deployed code. Using configured contract ${CONTRACT_ADDRESS} instead.`,
+      };
+    }
+  }
+
+  throw new Error(
+    `Scanned contract ${scannedContract} has no deployed code on current RPC. Verify QR payload and VITE_CONTRACT_ADDRESS.`,
+  );
+}
+
+export async function resolvePreferredContractAddress(): Promise<{
+  address: string;
+  hint: string;
+}> {
+  const provider = getReadProvider();
+  const primary = CONTRACT_ADDRESS;
+  if (primary) {
+    const primaryCode = await provider.getCode(primary);
+    if (primaryCode !== "0x") {
+      return { address: primary, hint: "" };
+    }
+  }
+
+  if (DEPLOYMENT_CONTRACT_ADDRESS && DEPLOYMENT_CONTRACT_ADDRESS !== primary) {
+    const deploymentCode = await provider.getCode(DEPLOYMENT_CONTRACT_ADDRESS);
+    if (deploymentCode !== "0x") {
+      return {
+        address: DEPLOYMENT_CONTRACT_ADDRESS,
+        hint: `Configured contract ${primary || "(empty)"} has no deployed code. Using deployment file contract ${DEPLOYMENT_CONTRACT_ADDRESS} instead.`,
+      };
+    }
+  }
+
+  throw new Error(
+    `Configured contract ${primary || "(empty)"} has no deployed code on current RPC. Redeploy the contract and restart the frontend.`,
+  );
 }
 
 const WALLET_SESSION_KEY = "medtrace_wallet_session_active";
@@ -55,7 +108,7 @@ export async function requestWalletConnection(): Promise<string> {
         {
           chainId: targetHex,
           chainName: CHAIN_ID === 31337 ? "Hardhat Local" : `Chain ${CHAIN_ID}`,
-          rpcUrls: [RPC_URL],
+          rpcUrls: [WALLET_RPC_URL],
           nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
         },
       ]);

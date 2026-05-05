@@ -1,0 +1,7 @@
+{
+  "network": "testnet",
+  "chainId": 11155111,
+  "contract": "MedicineTrace",
+  "address": "0xe2eD0Bc1A7c6AE7eD3ebAFc77db164afC9F48E9b",
+  "deployedAt": "2026-05-05T19:38:37.823Z"
+}

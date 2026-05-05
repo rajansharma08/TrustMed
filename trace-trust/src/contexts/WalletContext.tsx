@@ -54,13 +54,14 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       const net = await provider.getNetwork();
       const connected = sessionActive ? await getConnectedWalletAddress() : "";
       const normalized = connected.toLowerCase();
+      const hasPreferredWriter = !!AUTHORIZED_WRITE_ADDRESS;
 
       setState({
         isConnected: sessionActive && !!connected,
         address: sessionActive && connected ? connected : null,
         chainId: Number(net.chainId),
         authorizedWriter: AUTHORIZED_WRITE_ADDRESS,
-        isAuthorized: sessionActive && !!connected && normalized === AUTHORIZED_WRITE_ADDRESS,
+        isAuthorized: hasPreferredWriter && sessionActive && !!connected && normalized === AUTHORIZED_WRITE_ADDRESS,
       });
     } catch {
       setState({ ...baseState });

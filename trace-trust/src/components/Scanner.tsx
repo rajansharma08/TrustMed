@@ -19,7 +19,10 @@ export function Scanner({
 }: ScannerProps) {
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
-  const [shouldStart, setShouldStart] = useState(autoStart);
+  const secureContext = typeof window !== "undefined" ? window.isSecureContext : true;
+  const hasMediaDevices = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const canUseCamera = secureContext && hasMediaDevices;
+  const [shouldStart, setShouldStart] = useState(autoStart && canUseCamera);
   const elementId = useMemo(() => `qr-reader-${Math.random().toString(36).slice(2)}`, []);
   const qrRef = useRef<Html5Qrcode | null>(null);
   const activeRef = useRef(false);
@@ -45,6 +48,14 @@ export function Scanner({
       qrRef.current = null;
     };
   }, [elementId, stopScanner]);
+
+  useEffect(() => {
+    if (canUseCamera) return;
+    setError(
+      "Camera access needs HTTPS or localhost. For laptop scanning, open this app on localhost. For customer phone flow, use the phone's normal camera to scan the QR and open the verify page.",
+    );
+    setShouldStart(false);
+  }, [canUseCamera]);
 
   useEffect(() => {
     const qr = qrRef.current;
@@ -94,7 +105,12 @@ export function Scanner({
       {showControls && (
         <div className="flex items-center gap-2">
           {!running ? (
-            <Button type="button" onClick={() => setShouldStart(true)} className="gradient-primary text-primary-foreground border-0">
+            <Button
+              type="button"
+              disabled={!canUseCamera}
+              onClick={() => setShouldStart(true)}
+              className="gradient-primary text-primary-foreground border-0"
+            >
               {startLabel}
             </Button>
           ) : allowStop ? (

@@ -86,6 +86,25 @@ export function buildQRPayload(chainId: number, contract: string, medicineId: st
   return { type: "MEDTRACE", chainId, contract, medicineId };
 }
 
+export function buildVerifyUrl(baseUrl: string, payload: QRPayload, fallbackBaseUrl = ""): string {
+  const normalizedBase = baseUrl.trim() || fallbackBaseUrl.trim();
+  if (!normalizedBase) {
+    return JSON.stringify(payload);
+  }
+
+  try {
+    const url = new URL(normalizedBase);
+    const path = url.pathname.replace(/\/+$/, "");
+    url.pathname = /\/verify$/i.test(path) ? path : `${path || ""}/verify`;
+    url.searchParams.set("chainId", String(payload.chainId));
+    url.searchParams.set("contract", payload.contract);
+    url.searchParams.set("medicineId", payload.medicineId);
+    return url.toString();
+  } catch {
+    return JSON.stringify(payload);
+  }
+}
+
 export function isExpired(expDate: bigint): boolean {
   const now = BigInt(Math.floor(Date.now() / 1000));
   return expDate > 0n && expDate < now;
