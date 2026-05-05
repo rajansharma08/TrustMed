@@ -7,3 +7,9 @@ artifacts
 cache
 typechain-types
 coverage
+app/
+chain/
+docs/
+*.pdf
+*.html
+*.jpeg
