@@ -320,14 +320,27 @@ async function askOpenAi(prompt: string): Promise<{ text: string; finishReason?:
   return { text: combined, finishReason };
 }
 
-function parseAiSignal(text: string): { verdict: RiskVerdict | null; score: number | null; summary: string | null } {
+function parseAiSignal(text: string): {
+  verdict: RiskVerdict | null;
+  score: number | null;
+  summary: string | null;
+  highlights: string[];
+} {
   const verdictMatch = /Verdict:\s*(LEGIT|REVIEW|SUSPECT)/i.exec(text);
   const scoreMatch = /Suspicion\s*Level:\s*(\d{1,3})\s*%/i.exec(text);
   const summaryMatch = /Summary:\s*(.+)/i.exec(text);
+  const alertsMatch = /Key Alerts:\s*([\s\S]*?)(?:\n\s*Recommendation:|$)/i.exec(text);
+  const highlights = alertsMatch
+    ? alertsMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+        .filter((line) => line.length > 0)
+    : [];
   return {
     verdict: verdictMatch ? (verdictMatch[1].toUpperCase() as RiskVerdict) : null,
     score: scoreMatch ? clamp(Number(scoreMatch[1]), 0, 100) : null,
     summary: summaryMatch?.[1]?.trim() || null,
+    highlights,
   };
 }
 
@@ -376,7 +389,10 @@ export async function runAiMedicineRiskCheck(
     "Given this medicine record and local anomaly calculations, produce a concise report.",
     "Important timing rule: up to 1 hour transit variance is normal and should add 0% suspicion.",
     "Only after this grace period, increase suspicion gently (about 0.5% per extra hour of infeasibility).",
-    "Also flag near-same-time scans from different locations and strip-count mismatch.",
+    "Flag these checks in plain human words when detected:",
+    "- Same-time scans in different locations.",
+    "- Very short time for long-distance travel.",
+    "- Strip-count mismatch or unexpected scan counts.",
     "Return plain text only in this exact structure:",
     "Verdict: LEGIT|REVIEW|SUSPECT",
     "Suspicion Level: NN%",
@@ -430,6 +446,7 @@ export async function runAiMedicineRiskCheck(
       suspicionScore: finalScore,
       summary: finalSummary,
       highlights: local.highlights,
+      aiHighlights: parsed.highlights,
       aiNarrative: finalNarrative,
       usedAi: true,
     };

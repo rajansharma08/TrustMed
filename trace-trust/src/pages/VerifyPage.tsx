@@ -184,7 +184,7 @@ const VerifyPage = () => {
 
             <p className="text-sm text-muted-foreground">{analysis.summary}</p>
             <ul className="space-y-1.5 text-sm text-muted-foreground list-disc pl-5">
-              {analysis.highlights.map((highlight, index) => (
+              {(analysis.aiHighlights?.length ? analysis.aiHighlights : analysis.highlights).map((highlight, index) => (
                 <li key={`${index}-${highlight}`}>{highlight}</li>
               ))}
             </ul>

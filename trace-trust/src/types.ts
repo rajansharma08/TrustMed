@@ -30,6 +30,7 @@ export type RiskAnalysisResult = {
   suspicionScore: number; // 0 to 100
   summary: string;
   highlights: string[];
+  aiHighlights?: string[];
   aiNarrative: string;
   usedAi: boolean;
 };
