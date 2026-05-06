@@ -162,9 +162,9 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
   }
 
   // Feasibility checks: distance vs time
-  // Real-world transit logs often vary by ~1 hour. Treat that as normal.
+  // Allow 5% timing variation due to traffic and real-world delays.
   const avgFeasibleSpeed = 60; // km/h
-  const transitGraceHours = 1; // no suspicion inside this timing variance band
+  const transitTolerancePct = 5;
   const suspicionPerHourAfterGrace = 0.5; // gentler slope after grace period
   for (let i = 1; i < parsed.length; i++) {
     const prev = parsed[i - 1];
@@ -182,22 +182,23 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
     if (a && b && dtHours > 0) {
       const distKm = haversineKm(a, b);
       const minHours = distKm / avgFeasibleSpeed;
-      if (dtHours < minHours - transitGraceHours) {
-        const shortfallBeyondGrace = minHours - dtHours - transitGraceHours;
+      const minAllowedHours = minHours * (1 - transitTolerancePct / 100);
+      if (dtHours < minAllowedHours) {
+        const shortfallBeyondGrace = minAllowedHours - dtHours;
         const delta = Math.min(20, shortfallBeyondGrace * suspicionPerHourAfterGrace);
         if (delta >= 0.5) {
           score += delta;
           highlights.push(
-            `Transit may be infeasible: ${prev.location} -> ${curr.location}, short by ${shortfallBeyondGrace.toFixed(
+            `This leg seems too fast for the distance: ${prev.location} to ${curr.location} arrived about ${shortfallBeyondGrace.toFixed(
               1
-            )}h beyond ${transitGraceHours}h grace.`
+            )}h quicker than expected.`
           );
         }
       }
       diagnostics.push(
         `Leg ${i}: ${prev.location} -> ${curr.location}, ${distKm.toFixed(1)}km, actual ${dtHours.toFixed(
           2
-        )}h, minimum ${minHours.toFixed(2)}h (grace ${transitGraceHours.toFixed(2)}h).`
+        )}h, minimum ${minHours.toFixed(2)}h (tolerance ${transitTolerancePct}%).`
       );
     }
   }
@@ -211,7 +212,7 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
       if (dt > 300) continue; // 5 minutes window
       if (a.location === b.location) continue;
       score += 20;
-      highlights.push(`Near-simultaneous scans found at different locations.`);
+      highlights.push("Same-time scans appear in different locations.");
     }
   }
 
@@ -220,13 +221,13 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
     suspicionScore >= 50 ? "SUSPECT" : suspicionScore >= 25 ? "REVIEW" : "LEGIT";
   const summary =
     verdict === "SUSPECT"
-      ? "High anomaly risk detected across transit feasibility and/or scan consistency."
+      ? "We found strong warning signs in the journey data."
       : verdict === "REVIEW"
-        ? "Some anomalies detected. Record needs manual review."
-        : "No strong anomaly signal detected from current checkpoint evidence.";
+        ? "A few things look unusual and should be reviewed."
+        : "Everything looks consistent with a normal journey.";
 
   if (highlights.length === 0) {
-    highlights.push("Checkpoint sequence and scan counts look internally consistent.");
+    highlights.push("The journey and scan counts look consistent.");
   }
 
   return { verdict, suspicionScore, summary, highlights, diagnostics };
@@ -335,7 +336,7 @@ function buildFallbackNarrative(local: LocalRisk): string {
     "Safety check summary (rule-based):",
     `Verdict: ${local.verdict}`,
     `Risk Level: ${local.suspicionScore.toFixed(1)}%`,
-    `Summary: ${local.summary}`,
+    local.summary,
     "Key alerts:",
     ...highlights.map((item) => `- ${item}`),
   ].join("\n");
@@ -371,10 +372,10 @@ export async function runAiMedicineRiskCheck(
 
   const prompt = [
     "You are a pharma anti-counterfeit auditor.",
-    "Given this medicine record and local anomaly calculations, produce a concise report.",
-    "Important timing rule: up to 1 hour transit variance is normal and should add 0% suspicion.",
-    "Only after this grace period, increase suspicion gently (about 0.5% per extra hour of infeasibility).",
-    "Flag these checks in plain human words when detected:",
+    "Write a concise, human-friendly report for non-technical users.",
+    "Important timing rule: allow 5% timing variation due to traffic and real-world delays.",
+    "Only after this tolerance, increase suspicion gently (about 0.5% per extra hour of infeasibility).",
+    "Flag these checks in simple words when detected:",
     "- Same-time scans in different locations.",
     "- Very short time for long-distance travel.",
     "- Strip-count mismatch or unexpected scan counts.",
@@ -422,9 +423,7 @@ export async function runAiMedicineRiskCheck(
       ? local.suspicionScore
       : (parsed.score ?? local.suspicionScore);
     const finalSummary = aiConflictsWithDeterministic ? local.summary : summary;
-    const finalNarrative = aiConflictsWithDeterministic
-      ? `${aiNarrative}\n\n[Note: AI verdict conflicted with deterministic checks; local verdict applied.]`
-      : aiNarrative;
+    const finalNarrative = aiConflictsWithDeterministic ? aiNarrative : aiNarrative;
 
     return {
       verdict: finalVerdict,
