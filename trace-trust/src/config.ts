@@ -41,8 +41,5 @@ export const AUTHORIZED_WRITE_ADDRESS: string =
     "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
   ).toLowerCase();
 
-export const OPENAI_API_KEY: string =
-  (import.meta as any).env?.VITE_OPENAI_API_KEY || "";
-
-export const OPENAI_MODEL: string =
-  (import.meta as any).env?.VITE_OPENAI_MODEL || "gpt-4o-mini";
+export const AI_ENDPOINT: string =
+  (import.meta as any).env?.VITE_AI_ENDPOINT || "/.netlify/functions/ai-analysis";

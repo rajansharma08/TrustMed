@@ -1,4 +1,4 @@
-import { OPENAI_API_KEY, OPENAI_MODEL } from "./config";
+import { AI_ENDPOINT } from "./config";
 import type { Checkpoint, Medicine, RiskAnalysisResult, RiskVerdict } from "./types";
 
 type Policy = {
@@ -232,49 +232,34 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
   return { verdict, suspicionScore, summary, highlights, diagnostics };
 }
 
-async function askOpenAiOnce(prompt: string): Promise<{ text: string; finishReason?: string }> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function askAiOnce(prompt: string): Promise<{ text: string; finishReason?: string }> {
+  const res = await fetch(AI_ENDPOINT, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      temperature: 0.2,
-      max_tokens: 1800,
-      messages: [
-        {
-          role: "system",
-          content: "You are a pharma anti-counterfeit auditor who writes concise, factual reports.",
-        },
-        { role: "user", content: prompt },
-      ],
-    }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
   });
   if (!res.ok) {
-    const err = new Error(`OpenAI API error (${res.status})`) as Error & { status?: number };
+    const err = new Error(`AI API error (${res.status})`) as Error & { status?: number };
     err.status = res.status;
     throw err;
   }
   const data = await res.json();
-  const firstChoice = data?.choices?.[0];
-  const text = String(firstChoice?.message?.content || "").trim();
-  if (!text) throw new Error("Empty OpenAI response");
-  return { text, finishReason: firstChoice?.finish_reason };
+  const text = String(data?.text || "").trim();
+  if (!text) throw new Error("Empty AI response");
+  return { text, finishReason: data?.finishReason };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function askOpenAi(prompt: string): Promise<{ text: string; finishReason?: string }> {
+async function askAi(prompt: string): Promise<{ text: string; finishReason?: string }> {
   let first: { text: string; finishReason?: string } | null = null;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      first = await askOpenAiOnce(prompt);
+      first = await askAiOnce(prompt);
       break;
     } catch (e: any) {
       lastError = e;
@@ -288,7 +273,7 @@ async function askOpenAi(prompt: string): Promise<{ text: string; finishReason?:
   }
 
   if (!first) {
-    throw lastError instanceof Error ? lastError : new Error("OpenAI request failed");
+    throw lastError instanceof Error ? lastError : new Error("AI request failed");
   }
 
   if (first.finishReason !== "length") {
@@ -309,7 +294,7 @@ async function askOpenAi(prompt: string): Promise<{ text: string; finishReason?:
       combined,
     ].join("\n");
 
-    const next = await askOpenAiOnce(continuationPrompt);
+    const next = await askAiOnce(continuationPrompt);
     const trimmedNext = next.text.trim();
     if (!trimmedNext) break;
 
@@ -376,7 +361,7 @@ export async function runAiMedicineRiskCheck(
     })
     .join("\n");
 
-  if (!OPENAI_API_KEY) {
+  if (!AI_ENDPOINT) {
     return {
       ...local,
       aiNarrative: buildFallbackNarrative(local),
@@ -414,7 +399,7 @@ export async function runAiMedicineRiskCheck(
   ].join("\n");
 
   try {
-    const ai = await askOpenAi(prompt);
+    const ai = await askAi(prompt);
     const parsed = parseAiSignal(ai.text);
     const summary = isLikelyCompleteSummary(parsed.summary) ? parsed.summary! : local.summary;
     const aiNarrative =
