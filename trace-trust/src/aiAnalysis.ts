@@ -1,4 +1,4 @@
-import { GEMINI_API_KEY, GEMINI_MODEL } from "./config";
+import { OPENAI_API_KEY, OPENAI_MODEL } from "./config";
 import type { Checkpoint, Medicine, RiskAnalysisResult, RiskVerdict } from "./types";
 
 type Policy = {
@@ -232,47 +232,49 @@ function buildLocalRisk(medicine: Medicine, checkpoints: Checkpoint[]): LocalRis
   return { verdict, suspicionScore, summary, highlights, diagnostics };
 }
 
-async function askGeminiOnce(prompt: string): Promise<{ text: string; finishReason?: string }> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      GEMINI_MODEL
-    )}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 1800 },
-      }),
-    }
-  );
+async function askOpenAiOnce(prompt: string): Promise<{ text: string; finishReason?: string }> {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      temperature: 0.2,
+      max_tokens: 1800,
+      messages: [
+        {
+          role: "system",
+          content: "You are a pharma anti-counterfeit auditor who writes concise, factual reports.",
+        },
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
   if (!res.ok) {
-    const err = new Error(`Gemini API error (${res.status})`) as Error & { status?: number };
+    const err = new Error(`OpenAI API error (${res.status})`) as Error & { status?: number };
     err.status = res.status;
     throw err;
   }
   const data = await res.json();
-  const firstCandidate = data?.candidates?.[0];
-  const text = (data?.candidates || [])
-    .flatMap((c: any) => c?.content?.parts || [])
-    .map((p: any) => p?.text || "")
-    .join("\n")
-    .trim();
-  if (!text) throw new Error("Empty Gemini response");
-  return { text, finishReason: firstCandidate?.finishReason };
+  const firstChoice = data?.choices?.[0];
+  const text = String(firstChoice?.message?.content || "").trim();
+  if (!text) throw new Error("Empty OpenAI response");
+  return { text, finishReason: firstChoice?.finish_reason };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function askGemini(prompt: string): Promise<{ text: string; finishReason?: string }> {
+async function askOpenAi(prompt: string): Promise<{ text: string; finishReason?: string }> {
   let first: { text: string; finishReason?: string } | null = null;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      first = await askGeminiOnce(prompt);
+      first = await askOpenAiOnce(prompt);
       break;
     } catch (e: any) {
       lastError = e;
@@ -286,17 +288,17 @@ async function askGemini(prompt: string): Promise<{ text: string; finishReason?:
   }
 
   if (!first) {
-    throw lastError instanceof Error ? lastError : new Error("Gemini request failed");
+    throw lastError instanceof Error ? lastError : new Error("OpenAI request failed");
   }
 
-  if (first.finishReason !== "MAX_TOKENS") {
+  if (first.finishReason !== "length") {
     return first;
   }
 
   let combined = first.text;
   let finishReason = first.finishReason;
 
-  for (let i = 0; i < 2 && finishReason === "MAX_TOKENS"; i++) {
+  for (let i = 0; i < 2 && finishReason === "length"; i++) {
     const continuationPrompt = [
       "Continue the following audit report exactly from where it stopped.",
       "Do not restart from the beginning.",
@@ -307,7 +309,7 @@ async function askGemini(prompt: string): Promise<{ text: string; finishReason?:
       combined,
     ].join("\n");
 
-    const next = await askGeminiOnce(continuationPrompt);
+    const next = await askOpenAiOnce(continuationPrompt);
     const trimmedNext = next.text.trim();
     if (!trimmedNext) break;
 
@@ -318,7 +320,7 @@ async function askGemini(prompt: string): Promise<{ text: string; finishReason?:
   return { text: combined, finishReason };
 }
 
-function parseGeminiSignal(text: string): { verdict: RiskVerdict | null; score: number | null; summary: string | null } {
+function parseAiSignal(text: string): { verdict: RiskVerdict | null; score: number | null; summary: string | null } {
   const verdictMatch = /Verdict:\s*(LEGIT|REVIEW|SUSPECT)/i.exec(text);
   const scoreMatch = /Suspicion\s*Level:\s*(\d{1,3})\s*%/i.exec(text);
   const summaryMatch = /Summary:\s*(.+)/i.exec(text);
@@ -327,6 +329,18 @@ function parseGeminiSignal(text: string): { verdict: RiskVerdict | null; score: 
     score: scoreMatch ? clamp(Number(scoreMatch[1]), 0, 100) : null,
     summary: summaryMatch?.[1]?.trim() || null,
   };
+}
+
+function buildFallbackNarrative(local: LocalRisk): string {
+  const highlights = local.highlights.length > 0 ? local.highlights : ["No unusual activity found."];
+  return [
+    "Safety check summary (rule-based):",
+    `Verdict: ${local.verdict}`,
+    `Risk Level: ${local.suspicionScore.toFixed(1)}%`,
+    `Summary: ${local.summary}`,
+    "Key alerts:",
+    ...highlights.map((item) => `- ${item}`),
+  ].join("\n");
 }
 
 function isLikelyCompleteSummary(summary: string | null): boolean {
@@ -349,12 +363,11 @@ export async function runAiMedicineRiskCheck(
     })
     .join("\n");
 
-  if (!GEMINI_API_KEY) {
+  if (!OPENAI_API_KEY) {
     return {
       ...local,
-      aiNarrative:
-        "Gemini API key not configured (set VITE_GEMINI_API_KEY). Showing local anomaly analysis.",
-      usedGemini: false,
+      aiNarrative: buildFallbackNarrative(local),
+      usedAi: false,
     };
   }
 
@@ -385,31 +398,31 @@ export async function runAiMedicineRiskCheck(
   ].join("\n");
 
   try {
-    const ai = await askGemini(prompt);
-    const parsed = parseGeminiSignal(ai.text);
+    const ai = await askOpenAi(prompt);
+    const parsed = parseAiSignal(ai.text);
     const summary = isLikelyCompleteSummary(parsed.summary) ? parsed.summary! : local.summary;
     const aiNarrative =
-      ai.finishReason === "MAX_TOKENS"
+      ai.finishReason === "length"
         ? `${ai.text}\n\n[Note: AI response was very long and may still be partially truncated.]`
         : ai.text;
     const hasOnlyConsistencyNote =
       local.highlights.length === 1 &&
       /internally consistent/i.test(local.highlights[0]);
-    const geminiConflictsWithDeterministic =
+    const aiConflictsWithDeterministic =
       !!parsed.verdict &&
       parsed.verdict !== local.verdict &&
       local.suspicionScore <= 20 &&
       hasOnlyConsistencyNote;
 
-    const finalVerdict = geminiConflictsWithDeterministic
+    const finalVerdict = aiConflictsWithDeterministic
       ? local.verdict
       : (parsed.verdict || local.verdict);
-    const finalScore = geminiConflictsWithDeterministic
+    const finalScore = aiConflictsWithDeterministic
       ? local.suspicionScore
       : (parsed.score ?? local.suspicionScore);
-    const finalSummary = geminiConflictsWithDeterministic ? local.summary : summary;
-    const finalNarrative = geminiConflictsWithDeterministic
-      ? `${aiNarrative}\n\n[Note: Gemini verdict conflicted with deterministic checks; local verdict applied.]`
+    const finalSummary = aiConflictsWithDeterministic ? local.summary : summary;
+    const finalNarrative = aiConflictsWithDeterministic
+      ? `${aiNarrative}\n\n[Note: AI verdict conflicted with deterministic checks; local verdict applied.]`
       : aiNarrative;
 
     return {
@@ -418,20 +431,13 @@ export async function runAiMedicineRiskCheck(
       summary: finalSummary,
       highlights: local.highlights,
       aiNarrative: finalNarrative,
-      usedGemini: true,
+      usedAi: true,
     };
   } catch (e: any) {
-    const status = Number(e?.status || 0);
-    const narrative =
-      status === 503
-        ? "Gemini is temporarily unavailable right now. Showing local anomaly analysis."
-        : status === 429
-          ? "Gemini rate limit reached for now. Showing local anomaly analysis."
-          : `Gemini analysis unavailable: ${String(e?.message || e)}. Showing local anomaly analysis.`;
     return {
       ...local,
-      aiNarrative: narrative,
-      usedGemini: false,
+      aiNarrative: buildFallbackNarrative(local),
+      usedAi: false,
     };
   }
 }

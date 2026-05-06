@@ -31,5 +31,5 @@ export type RiskAnalysisResult = {
   summary: string;
   highlights: string[];
   aiNarrative: string;
-  usedGemini: boolean;
+  usedAi: boolean;
 };

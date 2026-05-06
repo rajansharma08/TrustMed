@@ -41,8 +41,8 @@ export const AUTHORIZED_WRITE_ADDRESS: string =
     "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
   ).toLowerCase();
 
-export const GEMINI_API_KEY: string =
-  (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
+export const OPENAI_API_KEY: string =
+  (import.meta as any).env?.VITE_OPENAI_API_KEY || "";
 
-export const GEMINI_MODEL: string =
-  (import.meta as any).env?.VITE_GEMINI_MODEL || "gemini-1.5-flash";
+export const OPENAI_MODEL: string =
+  (import.meta as any).env?.VITE_OPENAI_MODEL || "gpt-4o-mini";

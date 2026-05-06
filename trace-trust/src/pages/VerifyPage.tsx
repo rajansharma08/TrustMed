@@ -80,7 +80,7 @@ const VerifyPage = () => {
 
       const report = await runAiMedicineRiskCheck(record.medicine, record.checkpoints);
       if (runId === analysisRunRef.current) {
-        setAnalysis(report.usedGemini ? report : null);
+        setAnalysis(report.usedAi ? report : null);
       }
     } catch (e: any) {
       const message = String(e?.shortMessage || e?.message || e);
@@ -156,7 +156,7 @@ const VerifyPage = () => {
           )}
         </div>
 
-        {!analysisBusy && analysis && analysis.usedGemini && (
+        {!analysisBusy && analysis && analysis.usedAi && (
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Brain className="h-5 w-5 text-primary" />
