@@ -136,6 +136,8 @@ const VerifyPage = () => {
               showControls={false}
               allowStop={false}
               startLabel="Start Scan"
+              qrBoxSize={320}
+              className="min-h-[420px]"
             />
           )}
         </div>

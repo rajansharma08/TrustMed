@@ -8,6 +8,8 @@ interface ScannerProps {
   showControls?: boolean;
   allowStop?: boolean;
   startLabel?: string;
+  qrBoxSize?: number;
+  className?: string;
 }
 
 export function Scanner({
@@ -16,6 +18,8 @@ export function Scanner({
   showControls = true,
   allowStop = true,
   startLabel = "Start Camera",
+  qrBoxSize = 260,
+  className,
 }: ScannerProps) {
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
@@ -67,7 +71,7 @@ export function Scanner({
         setError("");
         await qr.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 260, height: 260 } },
+          { fps: 10, qrbox: { width: qrBoxSize, height: qrBoxSize } },
           async (decodedText) => {
             if (cancelled) return;
             const accepted = await onScan(decodedText);
@@ -94,7 +98,7 @@ export function Scanner({
   }, [onScan, shouldStart, stopScanner]);
 
   return (
-    <div className="glass-card p-6 space-y-3">
+    <div className={`glass-card p-6 space-y-3 ${className || ""}`}>
       <h3 className="text-lg font-display font-semibold text-foreground">Scanner</h3>
       <p className="text-sm text-muted-foreground">
         {showControls
